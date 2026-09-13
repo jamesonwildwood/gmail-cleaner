@@ -187,6 +187,7 @@ GmailCleaner.Scanner = {
                 </div>
                 <div class="result-actions">
                     ${actionButton}
+                    <button class="unsub-btn delete-btn" id="trash-${i}" onclick="GmailCleaner.Scanner.trashSender(${i})" title="Move every email from this sender to Trash (recoverable for 30 days)">Trash ${r.count}</button>
                 </div>
             `;
             resultsList.appendChild(item);
@@ -209,6 +210,7 @@ GmailCleaner.Scanner = {
             const result = await response.json();
 
             if (result.success) {
+                r.unsubscribed = true;
                 btn.textContent = '✓ Done!';
                 btn.classList.remove('one-click');
                 btn.classList.add('success');
@@ -232,6 +234,7 @@ GmailCleaner.Scanner = {
         const btn = document.getElementById('unsub-' + index);
 
         window.open(r.link, '_blank');
+        r.unsubscribed = true;
         btn.textContent = 'Opened ↗';
         btn.classList.add('success');
         // Keep button clickable so user can re-open if needed
@@ -299,12 +302,118 @@ GmailCleaner.Scanner = {
         } else if (manualOpened > 0) {
             toastMessage = `Opened ${manualOpened} unsubscribe links in new tabs. Complete the process on each page.`;
             GmailCleaner.UI.showInfoToast(toastMessage);
+        }
+
+        if (toastMessage && (autoSuccess > 0)) {
+            GmailCleaner.UI.showSuccessToast(toastMessage);
+        }
+
+        // Offer to clear out the mail from the senders just handled
+        const handled = selected
+            .map(({ index }) => ({ index, r: GmailCleaner.results[index] }))
+            .filter(({ r }) => r && r.unsubscribed && !r.trashed);
+        if (handled.length > 0) {
+            await this.offerTrashForSenders(handled);
+        }
+    },
+
+    senderQuery(r) {
+        // Prefer the exact address; fall back to the domain (matches all addresses at it)
+        return (r.email && r.email.trim()) || r.domain;
+    },
+
+    markTrashed(index, deleted) {
+        const r = GmailCleaner.results[index];
+        if (r) r.trashed = true;
+        const btn = document.getElementById('trash-' + index);
+        if (btn) {
+            btn.textContent = deleted === undefined ? 'Trashed' : `Trashed ${deleted}`;
+            btn.classList.add('success');
+            btn.disabled = true;
+        }
+    },
+
+    async trashSender(index) {
+        const r = GmailCleaner.results[index];
+        const btn = document.getElementById('trash-' + index);
+        if (!r || !btn || r.trashed) return;
+
+        const sender = this.senderQuery(r);
+        if (!confirm(`Move all emails from ${sender} to Trash?\n\nAbout ${r.count} emails. Gmail keeps Trash for 30 days, so this is recoverable.`)) return;
+
+        btn.disabled = true;
+        btn.textContent = 'Trashing...';
+        try {
+            const response = await fetch('/api/delete-emails', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sender })
+            });
+            const result = await response.json();
+            if (result.success) {
+                this.markTrashed(index, result.deleted);
+                GmailCleaner.UI.showSuccessToast(`Moved ${result.deleted} emails from ${sender} to Trash.`);
+            } else {
+                btn.disabled = false;
+                btn.textContent = `Trash ${r.count}`;
+                GmailCleaner.UI.showErrorToast(`Could not trash emails from ${sender}: ${result.message || 'unknown error'}`);
+            }
+        } catch (error) {
+            btn.disabled = false;
+            btn.textContent = `Trash ${r.count}`;
+            GmailCleaner.UI.showErrorToast(`Could not trash emails from ${sender}: ${error.message}`);
+        }
+    },
+
+    async offerTrashForSenders(handled) {
+        const totalEmails = handled.reduce((n, { r }) => n + (r.count || 0), 0);
+        const names = handled.slice(0, 5).map(({ r }) => this.senderQuery(r)).join('\n  ');
+        const more = handled.length > 5 ? `\n  ...and ${handled.length - 5} more` : '';
+        const ok = confirm(
+            `Also move their emails to Trash?\n\n${handled.length} senders, about ${totalEmails} emails:\n  ${names}${more}\n\nGmail keeps Trash for 30 days, so this is recoverable.`
+        );
+        if (!ok) return;
+
+        const senders = handled.map(({ r }) => this.senderQuery(r));
+        handled.forEach(({ index }) => {
+            const btn = document.getElementById('trash-' + index);
+            if (btn) { btn.disabled = true; btn.textContent = 'Trashing...'; }
+        });
+
+        try {
+            await fetch('/api/delete-emails-bulk', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ senders })
+            });
+        } catch (error) {
+            GmailCleaner.UI.showErrorToast('Could not start trashing: ' + error.message);
             return;
         }
 
-        if (toastMessage) {
-            GmailCleaner.UI.showSuccessToast(toastMessage);
+        GmailCleaner.UI.showInfoToast(`Moving emails from ${senders.length} senders to Trash...`);
+
+        // Poll the shared bulk-delete status until done
+        for (let i = 0; i < 600; i++) {
+            await new Promise(res => setTimeout(res, 1000));
+            let status;
+            try {
+                const resp = await fetch('/api/delete-bulk-status');
+                status = await resp.json();
+            } catch (error) {
+                continue;
+            }
+            if (status.done) {
+                handled.forEach(({ index }) => this.markTrashed(index));
+                if (status.error) {
+                    GmailCleaner.UI.showErrorToast(`${status.message || 'Finished with errors'}: ${status.error}`);
+                } else {
+                    GmailCleaner.UI.showSuccessToast(`Moved ${status.deleted_count} emails from ${senders.length} senders to Trash.`);
+                }
+                return;
+            }
         }
+        GmailCleaner.UI.showErrorToast('Trashing is taking longer than expected. Check the Delete Emails tab for progress.');
     },
 
     exportResults() {
