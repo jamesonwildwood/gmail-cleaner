@@ -5,6 +5,7 @@ Main application factory and configuration.
 """
 
 import hashlib
+import os
 import subprocess
 import time
 from contextlib import asynccontextmanager
@@ -99,6 +100,22 @@ def get_cache_bust_value() -> str:
     # If we have a base value (commit hash), use it
     if base_value:
         return base_value
+
+    # No git available (e.g. inside the Docker image, where .git is excluded):
+    # hash the static assets themselves so any change busts browser caches.
+    try:
+        hasher = hashlib.sha256()
+        for root, _dirs, files in sorted(os.walk("static")):
+            for name in sorted(files):
+                path = os.path.join(root, name)
+                hasher.update(path.encode())
+                with open(path, "rb") as f:
+                    hasher.update(f.read())
+        digest = hasher.hexdigest()[:10]
+        if digest:
+            return f"{settings.app_version}-{digest}"
+    except OSError:
+        pass
 
     # Fall back to app version
     if settings.app_version:
