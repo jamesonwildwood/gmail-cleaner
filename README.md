@@ -133,6 +133,9 @@ cd gmail-cleaner
 
 ### Option A: Docker (Recommended)
 
+> **This fork:** `docker-compose.yml` builds locally and hides the UI behind a Caddy reverse proxy with basic_auth. See [DEPLOY.md](DEPLOY.md) for the home-server setup; the steps below describe upstream's default compose file.
+
+
 1. Pull the latest image and start the container:
 ```bash
 docker compose pull && docker compose up
