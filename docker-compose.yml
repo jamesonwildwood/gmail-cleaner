@@ -42,11 +42,12 @@ services:
     # Override if your uid/gid differ:  PUID=1001 PGID=1001 docker compose up -d
     user: "${PUID:-1000}:${PGID:-1000}"
 
+    # Bypass `uv run` at startup: it wants to re-sync and write a cache, which a
+    # non-root user cannot do in this image. The venv already has every dependency.
+    command: ["/app/.venv/bin/python", "main.py"]
+
     environment:
       - WEB_AUTH=true
-      # The image's virtualenv was built by root; skip uv's startup re-sync so a
-      # non-root user does not need write access to /app/.venv.
-      - UV_NO_SYNC=1
       # OAUTH_HOST / OAUTH_EXTERNAL_PORT intentionally unset: redirect stays http://localhost:8767/
 
     security_opt:
