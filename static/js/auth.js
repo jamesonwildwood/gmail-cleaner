@@ -36,7 +36,16 @@ GmailCleaner.Auth = {
             userSection.innerHTML = '';
             GmailCleaner.Filters.showBar(false);
             GmailCleaner.UI.showView('login');
+            this.showAuthError(authStatus.error);
         }
+    },
+
+    showAuthError(message) {
+        const box = document.getElementById('authErrorBox');
+        if (!box) return;
+        if (!message) { box.hidden = true; box.textContent = ''; return; }
+        box.textContent = message;
+        box.hidden = false;
     },
 
     async loadLabelsForFilter() {
@@ -121,6 +130,10 @@ GmailCleaner.Auth = {
             if (status.logged_in) {
                 this.hideAuthLink();
                 this.updateUI(status);
+            } else if (status.error) {
+                // Google accepted the sign-in but the Gmail API call failed; stop waiting and say why.
+                this.resetSignInButton();
+                this.showAuthError(status.error);
             } else if (attempts < maxAttempts) {
                 setTimeout(() => this.pollStatus(attempts + 1), 1000);
             } else {

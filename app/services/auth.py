@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import threading
 from urllib.parse import urlparse
@@ -678,6 +679,7 @@ def check_login_status() -> dict:
                     profile = service.users().getProfile(userId="me").execute()
                     state.current_user["email"] = profile.get("emailAddress", "Unknown")
                     state.current_user["logged_in"] = True
+                    state.current_user["error"] = None
                     return state.current_user.copy()
                 elif creds and creds.expired and creds.refresh_token:
                     refreshed_creds = _try_refresh_creds(creds)
@@ -688,6 +690,7 @@ def check_login_status() -> dict:
                             "emailAddress", "Unknown"
                         )
                         state.current_user["logged_in"] = True
+                        state.current_user["error"] = None
                         return state.current_user.copy()
             except (ValueError, OSError) as e:
                 # Token file is invalid/corrupted
@@ -698,9 +701,32 @@ def check_login_status() -> dict:
                 except OSError:
                     pass
             except Exception as e:
-                # API errors, network issues, etc.
+                # API errors, network issues, etc. Keep the token; report the problem.
                 logger.error(f"Error checking login status: {e}", exc_info=True)
+                state.current_user["email"] = None
+                state.current_user["logged_in"] = False
+                state.current_user["error"] = _describe_login_error(e)
+                return state.current_user.copy()
 
     state.current_user["email"] = None
     state.current_user["logged_in"] = False
+    state.current_user["error"] = None
     return state.current_user.copy()
+
+
+def _describe_login_error(exc: Exception) -> str:
+    """Turn a Gmail API failure during login into a message the UI can show."""
+    text = str(exc)
+    if "accessNotConfigured" in text or "has not been used in project" in text:
+        match = re.search(r"https://console\.developers\.google\.com/apis/api/gmail\.googleapis\.com/overview\?project=\d+", text)
+        where = match.group(0) if match else "Google Cloud Console → APIs & Services → Library → Gmail API"
+        return (
+            "Signed in, but the Gmail API is not enabled for your Google Cloud project. "
+            f"Enable it at {where} , wait a minute, then reload this page."
+        )
+    if "insufficientPermissions" in text or "insufficient authentication scopes" in text.lower():
+        return "Signed in, but the token lacks Gmail permissions. Sign out and sign in again, approving both Gmail permissions."
+    if "invalid_grant" in text:
+        return "Your saved sign-in has expired or was revoked. Sign out and sign in again."
+    short = re.sub(r"\s+", " ", text).strip()
+    return f"Signed in, but Gmail returned an error: {short[:300]}"

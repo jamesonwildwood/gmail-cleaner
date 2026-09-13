@@ -12,7 +12,7 @@ class AppState:
 
     def __init__(self) -> None:
         # User state
-        self.current_user: dict = {"email": None, "logged_in": False}
+        self.current_user: dict = {"email": None, "logged_in": False, "error": None}
 
         # Scan state
         self.scan_results: list = []

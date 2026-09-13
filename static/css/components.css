@@ -1052,3 +1052,4 @@
 .auth-link-box { margin-top: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .auth-link-box .btn { text-decoration: none; }
 .auth-hint { color: #5f6368; font-size: 13px; max-width: 420px; text-align: center; margin: 0; }
+.auth-error { margin-top: 16px; padding: 12px 16px; border-radius: 8px; background: #fce8e6; color: #c5221f; font-size: 14px; max-width: 520px; text-align: left; word-break: break-word; }
