@@ -32,6 +32,15 @@ class Settings(BaseSettings):
         default="localhost",
         description="Custom host for OAuth redirect (e.g., your domain or IP)",
     )
+    oauth_redirect_uri: str | None = Field(
+        default=None,
+        description=(
+            "Full redirect URI registered with Google, e.g. "
+            "https://mail.example.com/oauth2callback. When set, it is used verbatim "
+            "and the callback is expected to reach oauth_port through a reverse proxy. "
+            "Overrides oauth_host / oauth_external_port."
+        ),
+    )
 
     @field_validator("web_auth", mode="before")
     @classmethod

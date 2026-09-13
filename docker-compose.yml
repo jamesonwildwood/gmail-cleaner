@@ -3,9 +3,8 @@
 # - Builds the image from this checkout (no auto-pull of a third-party :latest).
 # - The web UI (8766) is NOT published on the LAN. It is reachable only through
 #   Caddy on the shared docker network, where Caddy enforces HTTPS + basic_auth.
-# - The OAuth callback (8767) is bound to loopback only. Do the one-time sign-in
-#   from your laptop over an SSH tunnel:  ssh -L 8767:127.0.0.1:8767 user@host
-#   and keep the Google redirect URI at http://localhost:8767/
+# - The OAuth callback is served by Caddy too, at OAUTH_REDIRECT_URI (HTTPS on
+#   your real hostname), so sign-in works from any browser with no tunnel.
 #
 # Upstream's original compose (pulls ghcr.io/gururagavendra/gmail-cleaner:latest
 # and publishes both ports on 0.0.0.0) is in git history if you need it.
@@ -16,11 +15,10 @@ services:
     image: gmail-cleaner:local
     pull_policy: never
 
-    ports:
-      - "127.0.0.1:8767:8767"  # OAuth callback, loopback only (reach via SSH tunnel)
-
+    # No published ports. Caddy reaches both the UI (8766) and the OAuth
+    # callback listener (8767) over the shared docker network.
     networks:
-      - proxy                  # Caddy reaches the UI at gmail-cleaner:8766 on this network
+      - proxy
 
     volumes:
       - type: bind
@@ -48,7 +46,10 @@ services:
 
     environment:
       - WEB_AUTH=true
-      # OAUTH_HOST / OAUTH_EXTERNAL_PORT intentionally unset: redirect stays http://localhost:8767/
+      # Full HTTPS redirect URI registered with Google, served by Caddy and
+      # forwarded to this container's port 8767. Set it in ./.env, e.g.
+      #   OAUTH_REDIRECT_URI=https://mail.example.com/oauth2callback
+      - OAUTH_REDIRECT_URI=${OAUTH_REDIRECT_URI:-}
 
     security_opt:
       - no-new-privileges:true

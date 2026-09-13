@@ -336,3 +336,106 @@ class TestOAuthFlowErrors:
         # Note: This tests the structure, actual reset happens in background thread
         assert service is None
         assert error is not None
+
+
+class TestConfiguredRedirectUri:
+    """OAUTH_REDIRECT_URI makes the app use a reverse-proxied HTTPS callback."""
+
+    @patch("app.services.auth.HTTPServer")
+    @patch("app.services.auth.threading.Thread")
+    @patch("app.services.auth.settings")
+    @patch("app.services.auth._is_file_empty", return_value=False)
+    @patch("app.services.auth.os.path.exists")
+    @patch("app.services.auth.InstalledAppFlow")
+    @patch("app.services.auth._auth_in_progress", {"active": False})
+    @patch("app.services.auth.is_web_auth_mode", return_value=True)
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data='{"web": {"client_id": "test", "client_secret": "secret"}}',
+    )
+    def test_configured_redirect_uri_used_verbatim(
+        self,
+        mock_file,
+        mock_web_auth,
+        mock_flow,
+        mock_exists,
+        mock_is_file_empty,
+        mock_settings,
+        mock_thread,
+        mock_http_server,
+    ):
+        mock_settings.credentials_file = "credentials.json"
+        mock_settings.token_file = "token.json"
+        mock_settings.scopes = ["scope1"]
+        mock_settings.oauth_port = 8767
+        mock_settings.oauth_external_port = None
+        mock_settings.oauth_host = "localhost"
+        mock_settings.oauth_redirect_uri = "https://mail.example.com/oauth2callback"
+        mock_exists.side_effect = lambda p: "credentials.json" in str(p)
+
+        # Run the OAuth worker synchronously instead of in a background thread
+        def start_sync(target=None, **kwargs):
+            t = Mock()
+            t.start.side_effect = target
+            return t
+
+        mock_thread.side_effect = start_sync
+
+        # Abort right after the redirect URI is set: pretend the port is taken
+        mock_http_server.side_effect = OSError("Address already in use")
+
+        mock_flow_instance = Mock()
+        mock_flow_instance.authorization_url.return_value = ("https://accounts.google.com/x", "state123")
+        mock_flow.from_client_secrets_file.return_value = mock_flow_instance
+
+        auth.get_gmail_service()
+
+        assert mock_flow_instance.redirect_uri == "https://mail.example.com/oauth2callback"
+        mock_flow_instance.run_local_server.assert_not_called()
+        mock_flow_instance.authorization_url.assert_called_once()
+
+    @patch("app.services.auth.threading.Thread")
+    @patch("app.services.auth.settings")
+    @patch("app.services.auth._is_file_empty", return_value=False)
+    @patch("app.services.auth.os.path.exists")
+    @patch("app.services.auth.InstalledAppFlow")
+    @patch("app.services.auth._auth_in_progress", {"active": False})
+    @patch("app.services.auth.is_web_auth_mode", return_value=True)
+    @patch(
+        "builtins.open",
+        new_callable=mock_open,
+        read_data='{"web": {"client_id": "test", "client_secret": "secret"}}',
+    )
+    def test_invalid_configured_redirect_uri_is_rejected(
+        self,
+        mock_file,
+        mock_web_auth,
+        mock_flow,
+        mock_exists,
+        mock_is_file_empty,
+        mock_settings,
+        mock_thread,
+    ):
+        mock_settings.credentials_file = "credentials.json"
+        mock_settings.token_file = "token.json"
+        mock_settings.scopes = ["scope1"]
+        mock_settings.oauth_port = 8767
+        mock_settings.oauth_external_port = None
+        mock_settings.oauth_host = "localhost"
+        mock_settings.oauth_redirect_uri = "mail.example.com/oauth2callback"  # no scheme
+        mock_exists.side_effect = lambda p: "credentials.json" in str(p)
+
+        def start_sync(target=None, **kwargs):
+            t = Mock()
+            t.start.side_effect = target
+            return t
+
+        mock_thread.side_effect = start_sync
+        mock_flow_instance = Mock()
+        mock_flow.from_client_secrets_file.return_value = mock_flow_instance
+
+        auth.get_gmail_service()
+
+        mock_flow_instance.authorization_url.assert_not_called()
+        mock_flow_instance.run_local_server.assert_not_called()

@@ -7,7 +7,8 @@ reverse proxy already terminates HTTPS. Compared with upstream:
 |---|---|---|
 | Image | pulls `ghcr.io/.../gmail-cleaner:latest` on every start | built from this checkout |
 | Web UI (8766) | published on all interfaces, no auth | not published; reached only via Caddy with basic_auth |
-| OAuth callback (8767) | published on all interfaces | bound to 127.0.0.1 on the host; used once over an SSH tunnel |
+| OAuth callback (8767) | published on all interfaces, plain HTTP | not published; Caddy serves it over HTTPS at a path on the same hostname |
+| Container user | root | your uid/gid (`PUID`/`PGID`, default 1000) |
 | Container caps | default | `cap_drop: ALL`, `no-new-privileges` |
 
 The app itself has **no authentication** on its API. Anyone who can reach port
@@ -16,18 +17,16 @@ in for that, so do not publish 8766 directly.
 
 ## 1. Google OAuth client
 
-Follow the upstream README, "Get Google OAuth Credentials", with these choices:
+In Google Cloud Console (a project under your own Google account):
 
-- Application type: **Web application**
-- Authorized redirect URI: `http://localhost:8767/` (exactly this, nothing else)
-- Add your Gmail address as a **Test user**
+1. Enable the **Gmail API**.
+2. **Google Auth Platform → Audience**: User type **External**, and add your Gmail address under **Test users**.
+3. **Clients → Create client**: type **Web application**. Under **Authorized redirect URIs** add exactly:
+   `https://<your-host>/oauth2callback` (for example `https://mail.home.example.com/oauth2callback`).
+4. Download the JSON and save it as `credentials.json` in the project folder on the server.
 
-Save the downloaded JSON as `credentials.json` in the project folder on the host.
-
-Google rejects IP addresses in redirect URIs and requires HTTPS for anything
-other than localhost. The app hardcodes `http://` for custom hosts, so the
-upstream README's dynamic-DNS approach will not pass Google's validation.
-The `localhost` redirect plus an SSH tunnel below sidesteps all of that.
+Google requires HTTPS for any redirect URI that is not `localhost`, and rejects
+IP addresses. Serving the callback through Caddy satisfies both.
 
 ## 2. Host setup
 
@@ -35,46 +34,50 @@ The `localhost` redirect plus an SSH tunnel below sidesteps all of that.
 git clone https://github.com/jamesonwildwood/gmail-cleaner.git ~/gmail-cleaner
 cd ~/gmail-cleaner
 # copy credentials.json here
+cat > .env <<EOT
+OAUTH_REDIRECT_URI=https://mail.home.example.com/oauth2callback
+# PROXY_NETWORK=wiki_default   # only if Caddy is on a different docker network
+# PUID=1000
+# PGID=1000
+EOT
 ```
 
-Confirm the docker network Caddy is attached to and set it if it is not `wiki_default`:
-
-```bash
-docker inspect caddy --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
-echo "PROXY_NETWORK=<that name>" > .env      # only if different from wiki_default
-```
+Find the docker network Caddy is attached to with
+`docker inspect caddy --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'`.
 
 ## 3. Caddy site block
 
-Add to the Caddyfile and reload (`docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile`
-from the Caddy project directory, or however you normally reload).
+Inside your wildcard site (or as its own site), route the callback path to
+port 8767 and everything else to the UI on 8766, both behind `basic_auth`:
 
 ```
-mail.home.imagineyou.com {
-	import common
-	tls {
-		dns cloudflare {$CF_API_TOKEN}
-	}
+@mail host mail.home.example.com
+handle @mail {
 	basic_auth {
 		jameson <bcrypt hash>
 	}
-	reverse_proxy gmail-cleaner:8766
+	@oauth path /oauth2callback*
+	handle @oauth {
+		reverse_proxy gmail-cleaner:8767
+	}
+	handle {
+		reverse_proxy gmail-cleaner:8766
+	}
 }
 ```
 
-Generate the hash with `docker compose exec caddy caddy hash-password` and paste
-the output. Use a password that is not reused anywhere else; this login is the
-only thing between the WiFi and your mailbox.
-
-## 4. First start and one-time sign-in
-
-From your laptop, open a tunnel that carries `localhost:8767` to the host's loopback:
+Generate the hash with `docker compose exec caddy caddy hash-password` in the
+Caddy project directory, then validate and reload:
 
 ```bash
-ssh -L 8767:127.0.0.1:8767 jameson@geekom
+docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile
+docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile
 ```
 
-In that SSH session:
+Use a password that is not reused anywhere else; this login is the only thing
+between the WiFi and your mailbox.
+
+## 4. First start and sign-in
 
 ```bash
 cd ~/gmail-cleaner
@@ -82,21 +85,17 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-Then, on the laptop:
-
-1. Open `https://mail.home.imagineyou.com`, enter the basic_auth login, click **Sign In**.
-2. Copy the `https://accounts.google.com/o/oauth2/...` URL from the logs into the laptop browser.
-3. Approve. Google redirects the browser to `localhost:8767`, the tunnel delivers it to the container.
-4. Logs show `OAuth complete! Token saved.` The token lives in `./data/token.json` on the host.
-
-The tunnel is only needed while signing in. Close it afterwards.
+1. Open `https://mail.home.example.com`, enter the basic_auth login, click **Sign In**.
+2. Copy the `https://accounts.google.com/o/oauth2/...` URL from the logs into any browser.
+3. Approve. Google redirects to `/oauth2callback` on your hostname; Caddy hands it to the container.
+4. Logs show `OAuth complete! Token saved.` The token lives in `./data/token.json`, owned by your user.
 
 ## 5. Token expiry
 
-While the Google Cloud OAuth consent screen is in **Testing** status, refresh
-tokens expire after 7 days and you will repeat step 4 weekly. Switching the
-publishing status to **In production** removes the 7-day expiry. The
-"unverified app" warning remains and you click through it once.
+While the OAuth consent screen is in **Testing** status, refresh tokens expire
+after 7 days and you repeat step 4 weekly. Switching the publishing status to
+**In production** removes the 7-day expiry. The "unverified app" warning remains
+and you click through it once.
 
 To reset auth entirely: `docker compose down && rm -f ./data/token.json && docker compose up -d`.
 
