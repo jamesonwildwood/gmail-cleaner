@@ -71,17 +71,27 @@ GmailCleaner.Auth = {
             }
 
             if (status.web_auth_mode) {
-                const msg = `Docker detected! To sign in:
+                // Headless/Docker mode: the server cannot open a browser, so start
+                // the flow and show the Google authorization link in the page.
+                const signInResp = await fetch('/api/sign-in', { method: 'POST' });
+                const signInResult = await signInResp.json();
+                if (signInResult.error) {
+                    this.resetSignInButton();
+                    alert('Sign-in error: ' + signInResult.error);
+                    return;
+                }
 
-1. Check Docker logs for the authorization URL:
-   docker logs cleanup_email-gmail-cleaner-1
+                const url = await this.waitForAuthUrl();
+                if (url) {
+                    this.showAuthLink(url);
+                } else {
+                    this.resetSignInButton();
+                    alert('Could not get the Google sign-in link from the server. Check the container logs and try again.');
+                    return;
+                }
 
-2. Copy the URL and open it in your browser
-
-3. After authorizing, you'll be signed in automatically.
-
-(Or generate token.json locally and mount it)`;
-                alert(msg);
+                this.pollStatus();
+                return;
             }
 
             const signInResp = await fetch('/api/sign-in', { method: 'POST' });
@@ -109,6 +119,7 @@ GmailCleaner.Auth = {
             const status = await response.json();
 
             if (status.logged_in) {
+                this.hideAuthLink();
                 this.updateUI(status);
             } else if (attempts < maxAttempts) {
                 setTimeout(() => this.pollStatus(attempts + 1), 1000);
@@ -122,7 +133,45 @@ GmailCleaner.Auth = {
         }
     },
 
+    async waitForAuthUrl(attempts = 30) {
+        for (let i = 0; i < attempts; i++) {
+            try {
+                const resp = await fetch('/api/web-auth-status');
+                const status = await resp.json();
+                if (status.pending_auth_url) return status.pending_auth_url;
+            } catch (error) {
+                console.error('Error fetching auth URL:', error);
+            }
+            await new Promise(r => setTimeout(r, 500));
+        }
+        return null;
+    },
+
+    showAuthLink(url) {
+        const box = document.getElementById('authLinkBox');
+        if (!box) return;
+        const a = document.createElement('a');
+        a.href = url;
+        a.target = '_blank';
+        a.rel = 'noopener';
+        a.className = 'btn btn-primary btn-large';
+        a.textContent = 'Continue with Google \u2192';
+        const hint = document.createElement('p');
+        hint.className = 'auth-hint';
+        hint.textContent = 'Opens Google in a new tab. Approve access there; this page signs in automatically. The link is valid for 5 minutes.';
+        box.replaceChildren(a, hint);
+        box.hidden = false;
+        const signInBtn = document.getElementById('signInBtn');
+        if (signInBtn) signInBtn.innerHTML = '<span>Waiting for Google approval...</span>';
+    },
+
+    hideAuthLink() {
+        const box = document.getElementById('authLinkBox');
+        if (box) { box.hidden = true; box.replaceChildren(); }
+    },
+
     resetSignInButton() {
+        this.hideAuthLink();
         const signInBtn = document.getElementById('signInBtn');
         if (signInBtn) {
             signInBtn.disabled = false;

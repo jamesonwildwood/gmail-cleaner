@@ -1047,3 +1047,8 @@
     font-size: 12px;
     color: var(--text-tertiary);
 }
+
+/* Headless (Docker) sign-in: Google link shown in-page */
+.auth-link-box { margin-top: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.auth-link-box .btn { text-decoration: none; }
+.auth-hint { color: #5f6368; font-size: 13px; max-width: 420px; text-align: center; margin: 0; }
